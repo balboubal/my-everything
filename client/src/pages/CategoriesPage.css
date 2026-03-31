@@ -1,0 +1,162 @@
+.categories-page {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.categories-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-xl);
+}
+
+.categories-header h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: 1.8rem;
+}
+
+/* Categories list */
+.categories-list {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.category-item-wrapper {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.category-item-wrapper:last-child {
+  border-bottom: none;
+}
+
+.category-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-lg);
+  transition: background var(--transition-fast);
+}
+
+.category-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: all var(--transition-fast);
+}
+
+.expand-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.expand-placeholder {
+  width: 24px;
+}
+
+.category-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.category-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.category-name {
+  font-weight: 500;
+  display: block;
+}
+
+.category-stats {
+  display: flex;
+  gap: var(--spacing-md);
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.category-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.category-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.category-item:hover .category-actions {
+  opacity: 1;
+}
+
+.category-children {
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+/* Color picker */
+.color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.color-option {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  transition: transform var(--transition-fast);
+  border: 2px solid transparent;
+}
+
+.color-option:hover {
+  transform: scale(1.1);
+}
+
+.color-option.selected {
+  border-color: white;
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
+/* Empty state */
+.categories-list .empty-state {
+  padding: var(--spacing-2xl);
+}
+
+.categories-list .empty-state .btn {
+  margin-top: var(--spacing-md);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .category-actions {
+    opacity: 1;
+  }
+
+  .category-stats {
+    flex-direction: column;
+    gap: 2px;
+  }
+}
