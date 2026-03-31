@@ -3,7 +3,7 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import Database from 'better-sqlite3';
+import pg from 'pg';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -12,58 +12,77 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'studytimer-secret-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'me-secret-key-change-in-production';
 
-// Initialize SQLite database
-const db = new Database(path.join(__dirname, 'db', 'studytimer.db'));
+// Initialize PostgreSQL connection pool
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    name TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    preferences TEXT DEFAULT '{}'
-  );
+// Helper: run a query and return rows
+const query = async (text, params) => {
+  const result = await pool.query(text, params);
+  return result.rows;
+};
 
-  CREATE TABLE IF NOT EXISTS categories (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    parent_id TEXT,
-    name TEXT NOT NULL,
-    color TEXT DEFAULT '#6366f1',
-    icon TEXT DEFAULT 'folder',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE CASCADE
-  );
+// Helper: run a query and return first row
+const queryOne = async (text, params) => {
+  const result = await pool.query(text, params);
+  return result.rows[0] || null;
+};
 
-  CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    category_id TEXT,
-    title TEXT DEFAULT 'Untitled Session',
-    notes TEXT,
-    duration INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    start_time TEXT,
-    end_time TEXT,
-    timer_mode TEXT DEFAULT 'stopwatch',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
-  );
+// Create tables on startup
+const initDB = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      name TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      preferences TEXT DEFAULT '{}'
+    );
 
-  CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
-  CREATE INDEX IF NOT EXISTS idx_sessions_category_id ON sessions(category_id);
-  CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
-  CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id);
-`);
+    CREATE TABLE IF NOT EXISTS categories (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      parent_id TEXT REFERENCES categories(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT DEFAULT '#6366f1',
+      icon TEXT DEFAULT 'folder',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+      title TEXT DEFAULT 'Untitled Session',
+      notes TEXT,
+      duration INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      start_time TEXT,
+      end_time TEXT,
+      timer_mode TEXT DEFAULT 'stopwatch',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_category_id ON sessions(category_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
+    CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id);
+  `);
+  console.log('Database tables initialized');
+};
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static files in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '..', 'client', 'dist')));
+}
 
 // Auth middleware
 const authenticateToken = (req, res, next) => {
@@ -83,7 +102,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Optional auth - allows guest access but attaches user if token present
+// Optional auth
 const optionalAuth = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -100,7 +119,6 @@ const optionalAuth = (req, res, next) => {
 
 // ============ AUTH ROUTES ============
 
-// Register
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -109,7 +127,7 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existingUser = await queryOne('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser) {
       return res.status(400).json({ error: 'Email already registered' });
     }
@@ -117,14 +135,11 @@ app.post('/api/auth/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
 
-    db.prepare('INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)').run(
-      userId,
-      email,
-      hashedPassword,
-      name || email.split('@')[0]
+    await pool.query(
+      'INSERT INTO users (id, email, password, name) VALUES ($1, $2, $3, $4)',
+      [userId, email, hashedPassword, name || email.split('@')[0]]
     );
 
-    // Create default categories for new user
     const defaultCategories = [
       { name: 'Work', color: '#3b82f6', icon: 'briefcase' },
       { name: 'Study', color: '#8b5cf6', icon: 'book' },
@@ -132,12 +147,9 @@ app.post('/api/auth/register', async (req, res) => {
     ];
 
     for (const cat of defaultCategories) {
-      db.prepare('INSERT INTO categories (id, user_id, name, color, icon) VALUES (?, ?, ?, ?, ?)').run(
-        uuidv4(),
-        userId,
-        cat.name,
-        cat.color,
-        cat.icon
+      await pool.query(
+        'INSERT INTO categories (id, user_id, name, color, icon) VALUES ($1, $2, $3, $4, $5)',
+        [uuidv4(), userId, cat.name, cat.color, cat.icon]
       );
     }
 
@@ -153,7 +165,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// Login
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -162,7 +173,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const user = await queryOne('SELECT * FROM users WHERE email = $1', [email]);
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -184,43 +195,42 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Get current user
-app.get('/api/auth/me', authenticateToken, (req, res) => {
-  const user = db.prepare('SELECT id, email, name, preferences, created_at FROM users WHERE id = ?').get(req.user.userId);
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  const user = await queryOne(
+    'SELECT id, email, name, preferences, created_at FROM users WHERE id = $1',
+    [req.user.userId]
+  );
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
   res.json({ user: { ...user, preferences: JSON.parse(user.preferences || '{}') } });
 });
 
-// Update preferences
-app.put('/api/auth/preferences', authenticateToken, (req, res) => {
+app.put('/api/auth/preferences', authenticateToken, async (req, res) => {
   const { preferences } = req.body;
-  db.prepare('UPDATE users SET preferences = ? WHERE id = ?').run(
+  await pool.query('UPDATE users SET preferences = $1 WHERE id = $2', [
     JSON.stringify(preferences),
     req.user.userId
-  );
+  ]);
   res.json({ success: true });
 });
 
 // ============ CATEGORIES ROUTES ============
 
-// Get all categories for user
-app.get('/api/categories', authenticateToken, (req, res) => {
-  const categories = db.prepare(`
+app.get('/api/categories', authenticateToken, async (req, res) => {
+  const categories = await query(`
     SELECT c.*, 
-           (SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE category_id = c.id) as total_time,
-           (SELECT COUNT(*) FROM sessions WHERE category_id = c.id) as session_count
+           COALESCE((SELECT SUM(duration) FROM sessions WHERE category_id = c.id), 0) as total_time,
+           COALESCE((SELECT COUNT(*) FROM sessions WHERE category_id = c.id), 0) as session_count
     FROM categories c 
-    WHERE c.user_id = ?
+    WHERE c.user_id = $1
     ORDER BY c.created_at ASC
-  `).all(req.user.userId);
+  `, [req.user.userId]);
 
   res.json({ categories });
 });
 
-// Create category
-app.post('/api/categories', authenticateToken, (req, res) => {
+app.post('/api/categories', authenticateToken, async (req, res) => {
   const { name, color, icon, parentId } = req.body;
 
   if (!name) {
@@ -228,102 +238,100 @@ app.post('/api/categories', authenticateToken, (req, res) => {
   }
 
   const id = uuidv4();
-  db.prepare('INSERT INTO categories (id, user_id, parent_id, name, color, icon) VALUES (?, ?, ?, ?, ?, ?)').run(
-    id,
-    req.user.userId,
-    parentId || null,
-    name,
-    color || '#6366f1',
-    icon || 'folder'
+  await pool.query(
+    'INSERT INTO categories (id, user_id, parent_id, name, color, icon) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, req.user.userId, parentId || null, name, color || '#6366f1', icon || 'folder']
   );
 
-  const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
+  const category = await queryOne('SELECT * FROM categories WHERE id = $1', [id]);
   res.json({ category });
 });
 
-// Update category
-app.put('/api/categories/:id', authenticateToken, (req, res) => {
+app.put('/api/categories/:id', authenticateToken, async (req, res) => {
   const { name, color, icon, parentId } = req.body;
   const { id } = req.params;
 
-  const category = db.prepare('SELECT * FROM categories WHERE id = ? AND user_id = ?').get(id, req.user.userId);
+  const category = await queryOne(
+    'SELECT * FROM categories WHERE id = $1 AND user_id = $2',
+    [id, req.user.userId]
+  );
   if (!category) {
     return res.status(404).json({ error: 'Category not found' });
   }
 
-  db.prepare('UPDATE categories SET name = ?, color = ?, icon = ?, parent_id = ? WHERE id = ?').run(
-    name || category.name,
-    color || category.color,
-    icon || category.icon,
-    parentId !== undefined ? parentId : category.parent_id,
-    id
+  await pool.query(
+    'UPDATE categories SET name = $1, color = $2, icon = $3, parent_id = $4 WHERE id = $5',
+    [
+      name || category.name,
+      color || category.color,
+      icon || category.icon,
+      parentId !== undefined ? parentId : category.parent_id,
+      id
+    ]
   );
 
-  const updated = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
+  const updated = await queryOne('SELECT * FROM categories WHERE id = $1', [id]);
   res.json({ category: updated });
 });
 
-// Delete category
-app.delete('/api/categories/:id', authenticateToken, (req, res) => {
+app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
-  const category = db.prepare('SELECT * FROM categories WHERE id = ? AND user_id = ?').get(id, req.user.userId);
+  const category = await queryOne(
+    'SELECT * FROM categories WHERE id = $1 AND user_id = $2',
+    [id, req.user.userId]
+  );
   if (!category) {
     return res.status(404).json({ error: 'Category not found' });
   }
 
-  // Move subcategories to parent or make them root
-  db.prepare('UPDATE categories SET parent_id = ? WHERE parent_id = ?').run(category.parent_id, id);
-  
-  // Set sessions to uncategorized
-  db.prepare('UPDATE sessions SET category_id = NULL WHERE category_id = ?').run(id);
-  
-  db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+  await pool.query('UPDATE categories SET parent_id = $1 WHERE parent_id = $2', [category.parent_id, id]);
+  await pool.query('UPDATE sessions SET category_id = NULL WHERE category_id = $1', [id]);
+  await pool.query('DELETE FROM categories WHERE id = $1', [id]);
 
   res.json({ success: true });
 });
 
 // ============ SESSIONS ROUTES ============
 
-// Get sessions with filters
-app.get('/api/sessions', authenticateToken, (req, res) => {
+app.get('/api/sessions', authenticateToken, async (req, res) => {
   const { date, month, categoryId, limit, offset } = req.query;
 
-  let query = 'SELECT s.*, c.name as category_name, c.color as category_color FROM sessions s LEFT JOIN categories c ON s.category_id = c.id WHERE s.user_id = ?';
+  let queryText = 'SELECT s.*, c.name as category_name, c.color as category_color FROM sessions s LEFT JOIN categories c ON s.category_id = c.id WHERE s.user_id = $1';
   const params = [req.user.userId];
+  let paramIndex = 2;
 
   if (date) {
-    query += ' AND s.date = ?';
+    queryText += ` AND s.date = $${paramIndex++}`;
     params.push(date);
   }
 
   if (month) {
-    query += ' AND s.date LIKE ?';
+    queryText += ` AND s.date LIKE $${paramIndex++}`;
     params.push(`${month}%`);
   }
 
   if (categoryId) {
-    query += ' AND s.category_id = ?';
+    queryText += ` AND s.category_id = $${paramIndex++}`;
     params.push(categoryId);
   }
 
-  query += ' ORDER BY s.date DESC, s.created_at DESC';
+  queryText += ' ORDER BY s.date DESC, s.created_at DESC';
 
   if (limit) {
-    query += ' LIMIT ?';
+    queryText += ` LIMIT $${paramIndex++}`;
     params.push(parseInt(limit));
     if (offset) {
-      query += ' OFFSET ?';
+      queryText += ` OFFSET $${paramIndex++}`;
       params.push(parseInt(offset));
     }
   }
 
-  const sessions = db.prepare(query).all(...params);
+  const sessions = await query(queryText, params);
   res.json({ sessions });
 });
 
-// Create session
-app.post('/api/sessions', authenticateToken, (req, res) => {
+app.post('/api/sessions', authenticateToken, async (req, res) => {
   const { title, notes, duration, date, categoryId, timerMode, startTime, endTime } = req.body;
 
   if (duration === undefined) {
@@ -333,118 +341,121 @@ app.post('/api/sessions', authenticateToken, (req, res) => {
   const id = uuidv4();
   const sessionDate = date || new Date().toISOString().slice(0, 10);
 
-  db.prepare(`
+  await pool.query(`
     INSERT INTO sessions (id, user_id, category_id, title, notes, duration, date, start_time, end_time, timer_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    req.user.userId,
-    categoryId || null,
-    title || 'Untitled Session',
-    notes || '',
-    duration,
-    sessionDate,
-    startTime || null,
-    endTime || null,
-    timerMode || 'stopwatch'
-  );
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  `, [
+    id, req.user.userId, categoryId || null, title || 'Untitled Session',
+    notes || '', duration, sessionDate, startTime || null, endTime || null, timerMode || 'stopwatch'
+  ]);
 
-  const session = db.prepare('SELECT s.*, c.name as category_name, c.color as category_color FROM sessions s LEFT JOIN categories c ON s.category_id = c.id WHERE s.id = ?').get(id);
+  const session = await queryOne(
+    'SELECT s.*, c.name as category_name, c.color as category_color FROM sessions s LEFT JOIN categories c ON s.category_id = c.id WHERE s.id = $1',
+    [id]
+  );
   res.json({ session });
 });
 
-// Update session
-app.put('/api/sessions/:id', authenticateToken, (req, res) => {
+app.put('/api/sessions/:id', authenticateToken, async (req, res) => {
   const { title, notes, duration, date, categoryId } = req.body;
   const { id } = req.params;
 
-  const session = db.prepare('SELECT * FROM sessions WHERE id = ? AND user_id = ?').get(id, req.user.userId);
+  const session = await queryOne(
+    'SELECT * FROM sessions WHERE id = $1 AND user_id = $2',
+    [id, req.user.userId]
+  );
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  db.prepare(`
-    UPDATE sessions SET title = ?, notes = ?, duration = ?, date = ?, category_id = ?
-    WHERE id = ?
-  `).run(
+  await pool.query(`
+    UPDATE sessions SET title = $1, notes = $2, duration = $3, date = $4, category_id = $5
+    WHERE id = $6
+  `, [
     title !== undefined ? title : session.title,
     notes !== undefined ? notes : session.notes,
     duration !== undefined ? duration : session.duration,
     date || session.date,
     categoryId !== undefined ? categoryId : session.category_id,
     id
-  );
+  ]);
 
-  const updated = db.prepare('SELECT s.*, c.name as category_name, c.color as category_color FROM sessions s LEFT JOIN categories c ON s.category_id = c.id WHERE s.id = ?').get(id);
+  const updated = await queryOne(
+    'SELECT s.*, c.name as category_name, c.color as category_color FROM sessions s LEFT JOIN categories c ON s.category_id = c.id WHERE s.id = $1',
+    [id]
+  );
   res.json({ session: updated });
 });
 
-// Delete session
-app.delete('/api/sessions/:id', authenticateToken, (req, res) => {
+app.delete('/api/sessions/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
-  const session = db.prepare('SELECT * FROM sessions WHERE id = ? AND user_id = ?').get(id, req.user.userId);
+  const session = await queryOne(
+    'SELECT * FROM sessions WHERE id = $1 AND user_id = $2',
+    [id, req.user.userId]
+  );
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  await pool.query('DELETE FROM sessions WHERE id = $1', [id]);
   res.json({ success: true });
 });
 
-// Bulk delete sessions
-app.post('/api/sessions/bulk-delete', authenticateToken, (req, res) => {
+app.post('/api/sessions/bulk-delete', authenticateToken, async (req, res) => {
   const { ids } = req.body;
 
   if (!ids || !Array.isArray(ids)) {
     return res.status(400).json({ error: 'Session IDs array required' });
   }
 
-  const placeholders = ids.map(() => '?').join(',');
-  db.prepare(`DELETE FROM sessions WHERE id IN (${placeholders}) AND user_id = ?`).run(...ids, req.user.userId);
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+  await pool.query(
+    `DELETE FROM sessions WHERE id IN (${placeholders}) AND user_id = $${ids.length + 1}`,
+    [...ids, req.user.userId]
+  );
 
   res.json({ success: true, deleted: ids.length });
 });
 
 // ============ ANALYTICS ROUTES ============
 
-app.get('/api/analytics/summary', authenticateToken, (req, res) => {
+app.get('/api/analytics/summary', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const todayStats = db.prepare(`
-    SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count
-    FROM sessions WHERE user_id = ? AND date = ?
-  `).get(userId, today);
+  const todayStats = await queryOne(
+    'SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count FROM sessions WHERE user_id = $1 AND date = $2',
+    [userId, today]
+  );
 
-  const weekStats = db.prepare(`
-    SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count
-    FROM sessions WHERE user_id = ? AND date >= ?
-  `).get(userId, weekAgo);
+  const weekStats = await queryOne(
+    'SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count FROM sessions WHERE user_id = $1 AND date >= $2',
+    [userId, weekAgo]
+  );
 
-  const monthStats = db.prepare(`
-    SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count
-    FROM sessions WHERE user_id = ? AND date >= ?
-  `).get(userId, monthAgo);
+  const monthStats = await queryOne(
+    'SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count FROM sessions WHERE user_id = $1 AND date >= $2',
+    [userId, monthAgo]
+  );
 
-  const allTimeStats = db.prepare(`
-    SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count
-    FROM sessions WHERE user_id = ?
-  `).get(userId);
+  const allTimeStats = await queryOne(
+    'SELECT COALESCE(SUM(duration), 0) as total_time, COUNT(*) as session_count FROM sessions WHERE user_id = $1',
+    [userId]
+  );
 
-  // Get streak
-  const sessions = db.prepare(`
-    SELECT DISTINCT date FROM sessions WHERE user_id = ? ORDER BY date DESC
-  `).all(userId);
+  const sessionDates = await query(
+    'SELECT DISTINCT date FROM sessions WHERE user_id = $1 ORDER BY date DESC',
+    [userId]
+  );
 
   let streak = 0;
   let currentDate = new Date(today);
-  for (const session of sessions) {
-    const sessionDate = new Date(session.date);
+  for (const row of sessionDates) {
+    const sessionDate = new Date(row.date);
     const diffDays = Math.floor((currentDate - sessionDate) / (1000 * 60 * 60 * 24));
-    
     if (diffDays <= 1) {
       streak++;
       currentDate = sessionDate;
@@ -453,24 +464,20 @@ app.get('/api/analytics/summary', authenticateToken, (req, res) => {
     }
   }
 
-  // Category breakdown
-  const categoryBreakdown = db.prepare(`
+  const categoryBreakdown = await query(`
     SELECT c.id, c.name, c.color, COALESCE(SUM(s.duration), 0) as total_time, COUNT(s.id) as session_count
     FROM categories c
     LEFT JOIN sessions s ON c.id = s.category_id
-    WHERE c.user_id = ?
-    GROUP BY c.id
+    WHERE c.user_id = $1
+    GROUP BY c.id, c.name, c.color
     ORDER BY total_time DESC
-  `).all(userId);
+  `, [userId]);
 
-  // Daily data for last 30 days
-  const dailyData = db.prepare(`
+  const dailyData = await query(`
     SELECT date, SUM(duration) as total_time, COUNT(*) as session_count
-    FROM sessions
-    WHERE user_id = ? AND date >= ?
-    GROUP BY date
-    ORDER BY date ASC
-  `).all(userId, monthAgo);
+    FROM sessions WHERE user_id = $1 AND date >= $2
+    GROUP BY date ORDER BY date ASC
+  `, [userId, monthAgo]);
 
   res.json({
     today: todayStats,
@@ -483,30 +490,27 @@ app.get('/api/analytics/summary', authenticateToken, (req, res) => {
   });
 });
 
-// Heatmap data for the year
-app.get('/api/analytics/heatmap', authenticateToken, (req, res) => {
+app.get('/api/analytics/heatmap', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const yearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const data = db.prepare(`
+  const data = await query(`
     SELECT date, SUM(duration) as total_time, COUNT(*) as session_count
-    FROM sessions
-    WHERE user_id = ? AND date >= ?
-    GROUP BY date
-    ORDER BY date ASC
-  `).all(userId, yearAgo);
+    FROM sessions WHERE user_id = $1 AND date >= $2
+    GROUP BY date ORDER BY date ASC
+  `, [userId, yearAgo]);
 
   res.json({ heatmap: data });
 });
 
 // ============ EXPORT/IMPORT ROUTES ============
 
-app.get('/api/export', authenticateToken, (req, res) => {
+app.get('/api/export', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
-  const categories = db.prepare('SELECT * FROM categories WHERE user_id = ?').all(userId);
-  const sessions = db.prepare('SELECT * FROM sessions WHERE user_id = ?').all(userId);
-  const user = db.prepare('SELECT preferences FROM users WHERE id = ?').get(userId);
+  const categories = await query('SELECT * FROM categories WHERE user_id = $1', [userId]);
+  const sessions = await query('SELECT * FROM sessions WHERE user_id = $1', [userId]);
+  const user = await queryOne('SELECT preferences FROM users WHERE id = $1', [userId]);
 
   res.json({
     version: '1.0',
@@ -517,55 +521,73 @@ app.get('/api/export', authenticateToken, (req, res) => {
   });
 });
 
-app.post('/api/import', authenticateToken, (req, res) => {
+app.post('/api/import', authenticateToken, async (req, res) => {
   const { categories, sessions, preferences } = req.body;
   const userId = req.user.userId;
 
-  const transaction = db.transaction(() => {
-    // Import categories
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
     if (categories && Array.isArray(categories)) {
       for (const cat of categories) {
-        const existing = db.prepare('SELECT id FROM categories WHERE id = ? AND user_id = ?').get(cat.id, userId);
-        if (existing) {
-          db.prepare('UPDATE categories SET name = ?, color = ?, icon = ?, parent_id = ? WHERE id = ?').run(
-            cat.name, cat.color, cat.icon, cat.parent_id, cat.id
+        const existing = await client.query('SELECT id FROM categories WHERE id = $1 AND user_id = $2', [cat.id, userId]);
+        if (existing.rows.length > 0) {
+          await client.query(
+            'UPDATE categories SET name = $1, color = $2, icon = $3, parent_id = $4 WHERE id = $5',
+            [cat.name, cat.color, cat.icon, cat.parent_id, cat.id]
           );
         } else {
-          db.prepare('INSERT INTO categories (id, user_id, parent_id, name, color, icon) VALUES (?, ?, ?, ?, ?, ?)').run(
-            cat.id, userId, cat.parent_id, cat.name, cat.color, cat.icon
+          await client.query(
+            'INSERT INTO categories (id, user_id, parent_id, name, color, icon) VALUES ($1, $2, $3, $4, $5, $6)',
+            [cat.id, userId, cat.parent_id, cat.name, cat.color, cat.icon]
           );
         }
       }
     }
 
-    // Import sessions
     if (sessions && Array.isArray(sessions)) {
       for (const session of sessions) {
-        const existing = db.prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?').get(session.id, userId);
-        if (existing) {
-          db.prepare('UPDATE sessions SET title = ?, notes = ?, duration = ?, date = ?, category_id = ? WHERE id = ?').run(
-            session.title, session.notes, session.duration, session.date, session.category_id, session.id
+        const existing = await client.query('SELECT id FROM sessions WHERE id = $1 AND user_id = $2', [session.id, userId]);
+        if (existing.rows.length > 0) {
+          await client.query(
+            'UPDATE sessions SET title = $1, notes = $2, duration = $3, date = $4, category_id = $5 WHERE id = $6',
+            [session.title, session.notes, session.duration, session.date, session.category_id, session.id]
           );
         } else {
-          db.prepare('INSERT INTO sessions (id, user_id, category_id, title, notes, duration, date, timer_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-            session.id, userId, session.category_id, session.title, session.notes, session.duration, session.date, session.timer_mode || 'stopwatch'
+          await client.query(
+            'INSERT INTO sessions (id, user_id, category_id, title, notes, duration, date, timer_mode) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+            [session.id, userId, session.category_id, session.title, session.notes, session.duration, session.date, session.timer_mode || 'stopwatch']
           );
         }
       }
     }
 
-    // Import preferences
     if (preferences) {
-      db.prepare('UPDATE users SET preferences = ? WHERE id = ?').run(JSON.stringify(preferences), userId);
+      await client.query('UPDATE users SET preferences = $1 WHERE id = $2', [JSON.stringify(preferences), userId]);
     }
-  });
 
-  try {
-    transaction();
+    await client.query('COMMIT');
     res.json({ success: true });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Import error:', error);
     res.status(500).json({ error: 'Import failed' });
+  } finally {
+    client.release();
+  }
+});
+
+// Clear all data
+app.delete('/api/data/clear', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  try {
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM categories WHERE user_id = $1', [userId]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Clear data error:', error);
+    res.status(500).json({ error: 'Failed to clear data' });
   }
 });
 
@@ -574,6 +596,19 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+// Catch-all: serve frontend in production
+if (process.env.NODE_ENV === 'production') {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'client', 'dist', 'index.html'));
+  });
+}
+
+// Start server
+initDB().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`My Everything server running on port ${PORT}`);
+  });
+}).catch(err => {
+  console.error('Failed to initialize database:', err);
+  process.exit(1);
 });
