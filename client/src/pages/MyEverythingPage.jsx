@@ -163,7 +163,7 @@ export default function MyEverythingPage() {
 
   // Load settings from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('chronos_myeverything_settings');
+    const saved = localStorage.getItem('me_myeverything_settings');
     if (saved) {
       const settings = JSON.parse(saved);
       setConfirmOnMove(settings.confirmOnMove ?? true);
@@ -175,7 +175,7 @@ export default function MyEverythingPage() {
 
   // Save settings
   useEffect(() => {
-    localStorage.setItem('chronos_myeverything_settings', JSON.stringify({
+    localStorage.setItem('me_myeverything_settings', JSON.stringify({
       confirmOnMove,
       confirmOnDelete,
       hiddenCategories: Array.from(hiddenCategories),

@@ -3,8 +3,8 @@ import { useAuth } from './AuthContext';
 
 const DataContext = createContext(null);
 
-const GUEST_CATEGORIES_KEY = 'chronos_guest_categories';
-const GUEST_SESSIONS_KEY = 'chronos_guest_sessions';
+const GUEST_CATEGORIES_KEY = 'me_guest_categories';
+const GUEST_SESSIONS_KEY = 'me_guest_sessions';
 
 export function DataProvider({ children }) {
   const { token, isGuest } = useAuth();
@@ -327,7 +327,7 @@ export function DataProvider({ children }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `chronos_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `me_backup_${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -403,8 +403,8 @@ export function DataProvider({ children }) {
   // Clear all data
   const clearAllData = async () => {
     if (isGuest) {
-      localStorage.removeItem('chronos_guest_sessions');
-      localStorage.removeItem('chronos_guest_categories');
+      localStorage.removeItem('me_guest_sessions');
+      localStorage.removeItem('me_guest_categories');
       setCategories([]);
       setSessions([]);
     } else {
@@ -423,14 +423,16 @@ export function DataProvider({ children }) {
   // Helpers
   const getCategoryTree = useCallback(() => {
     const rootCategories = categories.filter(c => !c.parent_id);
-    const getChildren = (parentId) => categories.filter(c => c.parent_id === parentId);
+    const getChildren = (parentId) => {
+      return categories.filter(c => c.parent_id === parentId).map(child => ({
+        ...child,
+        children: getChildren(child.id)
+      }));
+    };
     
     return rootCategories.map(cat => ({
       ...cat,
-      children: getChildren(cat.id).map(child => ({
-        ...child,
-        children: getChildren(child.id)
-      }))
+      children: getChildren(cat.id)
     }));
   }, [categories]);
 

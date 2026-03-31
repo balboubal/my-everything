@@ -74,8 +74,8 @@ export default function SettingsPage() {
         await clearAllData();
       } else {
         // Fallback for guest mode - clear localStorage
-        localStorage.removeItem('chronos_guest_sessions');
-        localStorage.removeItem('chronos_guest_categories');
+        localStorage.removeItem('me_guest_sessions');
+        localStorage.removeItem('me_guest_categories');
         window.location.reload();
       }
       setShowDeleteConfirm(false);
@@ -451,7 +451,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-footer">
-        <p>Chronos v1.0.0</p>
+        <p>My Everything v1.0.0</p>
         <p>Made with focus and determination</p>
       </div>
 

@@ -44,7 +44,7 @@ export default function Layout() {
       <nav className="navbar">
         <div className="navbar-brand">
           <Clock className="brand-icon" />
-          <span className="brand-name">Chronos</span>
+          <span className="brand-name">My Everything</span>
           {isRunning && location.pathname !== '/' && (
             <span className="mini-timer">{formattedTime}</span>
           )}
@@ -77,7 +77,7 @@ export default function Layout() {
             <span>{isGuest ? 'Guest' : user?.name || user?.email}</span>
             {isGuest && <span className="badge badge-warning">Guest</span>}
           </div>
-          <button className="btn btn-ghost btn-icon desktop-only" onClick={logout} title="Sign out">
+          <button className="btn btn-ghost btn-icon desktop-only" onClick={logout} title={isGuest ? "Sign in" : "Sign out"}>
             <LogOut size={18} />
           </button>
           

@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react';
 
 const ThemeContext = createContext(null);
 
-const THEME_STORAGE_KEY = 'chronos_theme';
+const THEME_STORAGE_KEY = 'me_theme';
 
 export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {

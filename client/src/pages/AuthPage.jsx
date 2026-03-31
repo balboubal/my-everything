@@ -42,7 +42,7 @@ export default function AuthPage() {
           <div className="auth-logo">
             <Clock size={48} />
           </div>
-          <h1>Chronos</h1>
+          <h1>My Everything</h1>
           <p>Track your time, master your productivity</p>
         </div>
 

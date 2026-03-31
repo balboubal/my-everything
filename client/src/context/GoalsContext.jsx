@@ -3,7 +3,7 @@ import { useData } from './DataContext';
 
 const GoalsContext = createContext(null);
 
-const GOALS_STORAGE_KEY = 'chronos_goals';
+const GOALS_STORAGE_KEY = 'me_goals';
 
 const DEFAULT_GOALS = {
   dailyTarget: 4 * 3600,      // 4 hours in seconds

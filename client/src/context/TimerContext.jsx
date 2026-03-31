@@ -3,8 +3,8 @@ import { useAuth } from './AuthContext';
 
 const TimerContext = createContext(null);
 
-const STORAGE_KEY = 'chronos_timer_state';
-const SETTINGS_KEY = 'chronos_timer_settings';
+const STORAGE_KEY = 'me_timer_state';
+const SETTINGS_KEY = 'me_timer_settings';
 
 const DEFAULT_SETTINGS = {
   // Pomodoro settings
@@ -148,7 +148,7 @@ export function TimerProvider({ children }) {
     }
     
     if (settings.browserNotifications && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification('Chronos Timer', { body: message, icon: '/favicon.ico' });
+      new Notification('My Everything', { body: message, icon: '/favicon.ico' });
     }
   }, [settings.soundEnabled, settings.browserNotifications]);
 
@@ -237,7 +237,7 @@ export function TimerProvider({ children }) {
   // Update document title
   useEffect(() => {
     if (!settings.showTimeInTitle) {
-      document.title = 'Chronos - Study Timer';
+      document.title = 'My Everything';
       return;
     }
     const formatted = formatTime(seconds);
@@ -245,8 +245,8 @@ export function TimerProvider({ children }) {
       ? (pomodoroPhase === 'work' ? '🍅' : '☕') 
       : (mode === 'countdown' ? '⏳' : '⏱️');
     document.title = isRunning 
-      ? `${formatted} ${modeIcon} Chronos`
-      : 'Chronos - Study Timer';
+      ? `${formatted} ${modeIcon} ME`
+      : 'My Everything';
   }, [seconds, isRunning, mode, pomodoroPhase, settings.showTimeInTitle]);
 
   const formatTime = (secs) => {

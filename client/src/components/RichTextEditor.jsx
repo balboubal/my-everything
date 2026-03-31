@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import './RichTextEditor.css';
 
-const EDITOR_SIZE_KEY = 'chronos_editor_size';
+const EDITOR_SIZE_KEY = 'me_editor_size';
 
 export default function RichTextEditor({ 
   value = '', 

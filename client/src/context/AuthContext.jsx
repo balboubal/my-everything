@@ -14,10 +14,12 @@ export function AuthProvider({ children }) {
     if (token) {
       fetchUser();
     } else {
-      // Check if guest mode
+      // Auto-continue as guest if no token - no auth page needed
       const guestMode = localStorage.getItem('guestMode');
-      if (guestMode === 'true') {
+      if (guestMode !== 'false') {
+        // Default to guest mode so users can start immediately
         setIsGuest(true);
+        localStorage.setItem('guestMode', 'true');
       }
       setLoading(false);
     }
@@ -96,7 +98,7 @@ export function AuthProvider({ children }) {
 
   const logout = () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('guestMode');
+    localStorage.setItem('guestMode', 'false');
     setToken(null);
     setUser(null);
     setIsGuest(false);

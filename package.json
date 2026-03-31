@@ -8,7 +8,7 @@
     "client": "cd client && npm run dev",
     "setup": "npm install && cd client && npm install && cd ../server && npm install",
     "postinstall": "cd client && npm install && cd ../server && npm install",
-    "build": "cd client && npm install && node node_modules/vite/bin/vite.js build",
+    "build": "cd client && npm install && npm run build",
     "start": "cd server && node index.js"
   },
   "dependencies": {
